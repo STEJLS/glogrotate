@@ -25,12 +25,15 @@ import (
 const (
 	defaultDeleteInfoAfter = 30 * 24 * time.Hour
 	defaultWarnMult        = 2
-	defaultErrorMult       = 3
+	defaultErrorMult       = 1
+	defaultMaxFilesSize    = 20
+	gb                     = 1 << 10
 )
 
 var (
 	base            = flag.String("base", "/var/log/", "log subdir")
 	deleteInfoAfter = flag.Duration("maxage", defaultDeleteInfoAfter, "delete INFO files older than this")
+	maxSize         = flag.Uint64("maxsize", defaultMaxFilesSize, "delete oldest file if total size greater")
 	warnMult        = flag.Int("warn", defaultWarnMult, "multiplier relative to maxage for WARNING files")
 	errorMult       = flag.Int("error", defaultErrorMult, "multiplier relative to maxage for ERROR/FATAL files")
 	verbose         = flag.Bool("v", false, "verbose")
@@ -40,7 +43,8 @@ func main() {
 	flag.Parse()
 
 	for _, log := range flag.Args() {
-		clean(*base+"/"+log, log)
+		clean(*base, log)
+		toSizeLimit(*base, log)
 	}
 }
 
@@ -48,7 +52,7 @@ func clean(dir, name string) {
 	if *verbose {
 		fmt.Printf("clean %s/%s*...\n", dir, name)
 	}
-	fs, err := filepath.Glob(dir + "/" + name + "*")
+	fileAndDirNames, err := filepath.Glob(dir + "/" + name + "*")
 	if err != nil {
 		fatalf("file error: %s", err)
 	}
@@ -56,7 +60,18 @@ func clean(dir, name string) {
 	doNotTouch := map[string]struct{}{}
 	var candidates []string
 
-	for _, f := range fs {
+	for _, f := range fileAndDirNames {
+		info, err := os.Stat(f)
+		if err != nil {
+			if *verbose {
+				fmt.Printf("Error while getting info about file -> "+f, err)
+			}
+			continue
+		}
+		if info.IsDir() {
+			doNotTouch[f] = struct{}{}
+			continue
+		}
 		if t, err := os.Readlink(f); err == nil {
 			// it's a symlink to the current file.
 			a := filepath.Join(filepath.Dir(f), t)
@@ -73,17 +88,9 @@ func clean(dir, name string) {
 			}
 			continue
 		}
-		// we want the date from 'one.rz-reqmngt1-eu.root.log.ERROR.20150320-103857.29198'
-		// (might have a .gz suffix)
-		fields := strings.Split(f, ".")
-		if len(fields) < 3 {
-			fatalf("unexpected filename: %q", f)
-		}
-		if fields[len(fields)-1] == `gz` {
-			fields = fields[:len(fields)-1]
-		}
+
 		var dAfter time.Duration
-		level := fields[len(fields)-3]
+		level := getLevel(f)
 		switch level {
 		case "INFO":
 			dAfter = *deleteInfoAfter
@@ -92,17 +99,26 @@ func clean(dir, name string) {
 		case "ERROR", "FATAL":
 			dAfter = time.Duration(*errorMult) * (*deleteInfoAfter)
 		default:
-			fatalf("weird log level: %q", level)
+			if *verbose {
+				fmt.Printf("weird log level: %q\n", level)
+			}
+
+			continue
 		}
-		d, err := time.Parse("20060102", strings.SplitN(fields[len(fields)-2], "-", 2)[0])
-		if err != nil {
-			fatalf("invalid date: %s", err)
+
+		cd := getCreationDate(f)
+		if cd.IsZero() {
+			continue
 		}
-		if d.Before(time.Now().Add(-dAfter)) {
+
+		if cd.Before(time.Now().Add(-dAfter)) {
 			if *verbose {
 				fmt.Printf("delete %s\n", f)
 			}
-			os.Remove(f)
+			err := os.Remove(f)
+			if err != nil {
+				fmt.Printf("os.Remove(f) == err :%s\n", err)
+			}
 			continue
 		}
 		if !strings.HasSuffix(f, ".gz") {
@@ -110,9 +126,94 @@ func clean(dir, name string) {
 				fmt.Printf("gzipping %s...\n", f)
 			}
 			if err := exec.Command("gzip", f).Run(); err != nil {
-				fatalf("gzip: %s", err)
+				fmt.Printf("gzip: %s", err)
+				continue
 			}
 		}
+	}
+}
+
+func toSizeLimit(dir, name string) {
+	var totalSize int64
+	var oldestTime time.Time
+	if *verbose {
+		fmt.Printf("check size limit of %s/%s*...\n", dir, name)
+	}
+	doNotTouch := map[string]struct{}{}
+
+	fileAndDirNames, err := filepath.Glob(dir + "/" + name + "*")
+	if err != nil {
+		fatalf("file error: %s", err)
+	}
+
+	for _, f := range fileAndDirNames {
+		info, err := os.Stat(f)
+		if err != nil {
+			fatalf("Error while getting info about file -> "+f, err)
+		}
+
+		if info.IsDir() {
+			doNotTouch[f] = struct{}{}
+			continue
+		}
+		if t, err := os.Readlink(f); err == nil {
+			a := filepath.Join(filepath.Dir(f), t)
+			doNotTouch[a] = struct{}{}
+			doNotTouch[f] = struct{}{}
+			continue
+		}
+
+	}
+
+	for {
+		totalSize = 0
+		oldestTime = time.Now()
+		var oldestFileName string
+
+		fileAndDirNames, err := filepath.Glob(dir + "/" + name + "*")
+		if err != nil {
+			fatalf("file error: %s", err)
+		}
+
+		for _, f := range fileAndDirNames {
+			if _, ok := doNotTouch[f]; ok {
+				if *verbose {
+					fmt.Printf("don't touch: %s\n", f)
+				}
+				continue
+			}
+
+			info, err := os.Stat(f)
+			if err != nil {
+				fatalf("Error while getting info about file -> "+f, err)
+			}
+
+			cd := getCreationDate(info.Name())
+			if cd.IsZero() {
+				continue
+			}
+
+			totalSize += info.Size()
+			if cd.Before(oldestTime) {
+				oldestTime = cd
+				oldestFileName = f
+			}
+		}
+
+		if uint64(totalSize) < gb*(*maxSize) {
+			break
+		}
+
+		if *verbose {
+			fmt.Printf("clean oldest file %s \n", oldestFileName)
+		}
+
+		err = os.Remove(oldestFileName)
+		if err != nil {
+			fatalf("Error while deleting oldest file-> "+oldestFileName, err)
+		}
+		continue
+
 	}
 }
 
@@ -120,4 +221,48 @@ func fatalf(f string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, f, args)
 	fmt.Fprint(os.Stderr, "\n")
 	os.Exit(1)
+}
+
+func getLevel(fileName string) string {
+	fields := strings.Split(fileName, ".")
+	if len(fields) < 3 {
+		if *verbose {
+			fmt.Printf("unexpected filename: %q \n", fileName)
+		}
+		return ""
+	}
+	if fields[len(fields)-1] == `gz` {
+		fields = fields[:len(fields)-1]
+	}
+
+	if len(fields) < 3 {
+		if *verbose {
+			fmt.Printf("unexpected filename: %q \n", fileName)
+		}
+		return ""
+	}
+
+	return fields[len(fields)-3]
+}
+
+// we want the date from 'one.rz-reqmngt1-eu.root.log.ERROR.20150320-103857.29198'
+// (might have a .gz suffix)
+func getCreationDate(fileName string) time.Time {
+	fields := strings.Split(fileName, ".")
+	if len(fields) < 3 {
+		if *verbose {
+			fmt.Printf("unexpected filename: %q \n", fileName)
+		}
+		return time.Time{}
+	}
+	if fields[len(fields)-1] == `gz` {
+		fields = fields[:len(fields)-1]
+	}
+	d, err := time.Parse("20060102", strings.SplitN(fields[len(fields)-2], "-", 2)[0])
+	if err != nil && *verbose {
+		fmt.Printf("invalid date: %s", err)
+		return time.Time{}
+	}
+
+	return d
 }

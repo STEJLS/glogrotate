@@ -25,15 +25,15 @@ import (
 const (
 	defaultDeleteInfoAfter = 30 * 24 * time.Hour
 	defaultWarnMult        = 2
-	defaultErrorMult       = 1
-	defaultMaxFilesSize    = 20
-	gb                     = 1 << 10
+	defaultErrorMult       = 3
+	defaultMaxFilesSize    = 2
+	gb                     = 1 << 30
 )
 
 var (
 	base            = flag.String("base", "/var/log/", "log subdir")
 	deleteInfoAfter = flag.Duration("maxage", defaultDeleteInfoAfter, "delete INFO files older than this")
-	maxSize         = flag.Uint64("maxsize", defaultMaxFilesSize, "delete oldest file if total size greater")
+	maxSize         = flag.Uint64("maxsize", defaultMaxFilesSize, "delete oldest file if total size greater (in GB)")
 	warnMult        = flag.Int("warn", defaultWarnMult, "multiplier relative to maxage for WARNING files")
 	errorMult       = flag.Int("error", defaultErrorMult, "multiplier relative to maxage for ERROR/FATAL files")
 	verbose         = flag.Bool("v", false, "verbose")

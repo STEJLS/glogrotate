@@ -14,12 +14,13 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/golang/glog"
 )
 
 const (
@@ -36,10 +37,10 @@ var (
 	maxSize         = flag.Uint64("maxsize", defaultMaxFilesSize, "delete oldest file if total size greater (in GB)")
 	warnMult        = flag.Int("warn", defaultWarnMult, "multiplier relative to maxage for WARNING files")
 	errorMult       = flag.Int("error", defaultErrorMult, "multiplier relative to maxage for ERROR/FATAL files")
-	verbose         = flag.Bool("v", false, "verbose")
 )
 
 func main() {
+	flag.Set("logtostderr", "true")
 	flag.Parse()
 
 	for _, log := range flag.Args() {
@@ -49,12 +50,13 @@ func main() {
 }
 
 func clean(dir, name string) {
-	if *verbose {
-		fmt.Printf("clean %s/%s*...\n", dir, name)
+	if glog.V(1) {
+		glog.Infof("clean %s/%s*...\n", dir, name)
 	}
 	fileAndDirNames, err := filepath.Glob(dir + "/" + name + "*")
 	if err != nil {
-		fatalf("file error: %s", err)
+		glog.Infof("file error: %s", err)
+		return
 	}
 
 	doNotTouch := map[string]struct{}{}
@@ -63,8 +65,8 @@ func clean(dir, name string) {
 	for _, f := range fileAndDirNames {
 		info, err := os.Stat(f)
 		if err != nil {
-			if *verbose {
-				fmt.Printf("Error while getting info about file -> "+f, err)
+			if glog.V(1) {
+				glog.Infof("Error while getting info about file -> "+f, err)
 			}
 			continue
 		}
@@ -83,8 +85,8 @@ func clean(dir, name string) {
 
 	for _, f := range candidates {
 		if _, ok := doNotTouch[f]; ok {
-			if *verbose {
-				fmt.Printf("don't touch: %s\n", f)
+			if glog.V(1) {
+				glog.Infof("don't touch: %s\n", f)
 			}
 			continue
 		}
@@ -99,8 +101,8 @@ func clean(dir, name string) {
 		case "ERROR", "FATAL":
 			dAfter = time.Duration(*errorMult) * (*deleteInfoAfter)
 		default:
-			if *verbose {
-				fmt.Printf("weird log level: %q\n", level)
+			if glog.V(1) {
+				glog.Infof("weird log level: %q\n", level)
 			}
 
 			continue
@@ -112,21 +114,21 @@ func clean(dir, name string) {
 		}
 
 		if cd.Before(time.Now().Add(-dAfter)) {
-			if *verbose {
-				fmt.Printf("delete %s\n", f)
+			if glog.V(1) {
+				glog.Infof("delete %s\n", f)
 			}
 			err := os.Remove(f)
 			if err != nil {
-				fmt.Printf("os.Remove(f) == err :%s\n", err)
+				glog.Infof("os.Remove(f) == err :%s\n", err)
 			}
 			continue
 		}
 		if !strings.HasSuffix(f, ".gz") {
-			if *verbose {
-				fmt.Printf("gzipping %s...\n", f)
+			if glog.V(1) {
+				glog.Infof("gzipping %s...\n", f)
 			}
 			if err := exec.Command("gzip", f).Run(); err != nil {
-				fmt.Printf("gzip: %s", err)
+				glog.Infof("gzip: %s", err)
 				continue
 			}
 		}
@@ -136,20 +138,22 @@ func clean(dir, name string) {
 func toSizeLimit(dir, name string) {
 	var totalSize int64
 	var oldestTime time.Time
-	if *verbose {
-		fmt.Printf("check size limit of %s/%s*...\n", dir, name)
+	if glog.V(1) {
+		glog.Infof("check size limit of %s/%s*...\n", dir, name)
 	}
 	doNotTouch := map[string]struct{}{}
 
 	fileAndDirNames, err := filepath.Glob(dir + "/" + name + "*")
 	if err != nil {
-		fatalf("file error: %s", err)
+		glog.Infof("file error: %s", err)
+		return
 	}
 
 	for _, f := range fileAndDirNames {
 		info, err := os.Stat(f)
 		if err != nil {
-			fatalf("Error while getting info about file -> "+f, err)
+			glog.Infof("Error while getting info about file -> "+f, err)
+			continue
 		}
 
 		if info.IsDir() {
@@ -172,20 +176,22 @@ func toSizeLimit(dir, name string) {
 
 		fileAndDirNames, err := filepath.Glob(dir + "/" + name + "*")
 		if err != nil {
-			fatalf("file error: %s", err)
+			glog.Infof("file error: %s", err)
+			return
 		}
 
 		for _, f := range fileAndDirNames {
 			if _, ok := doNotTouch[f]; ok {
-				if *verbose {
-					fmt.Printf("don't touch: %s\n", f)
+				if glog.V(1) {
+					glog.Infof("don't touch: %s\n", f)
 				}
 				continue
 			}
 
 			info, err := os.Stat(f)
 			if err != nil {
-				fatalf("Error while getting info about file -> "+f, err)
+				glog.Infof("Error while getting info about file -> "+f, err)
+				continue
 			}
 
 			cd := getCreationDate(info.Name())
@@ -204,30 +210,25 @@ func toSizeLimit(dir, name string) {
 			break
 		}
 
-		if *verbose {
-			fmt.Printf("clean oldest file %s \n", oldestFileName)
+		if glog.V(1) {
+			glog.Infof("clean oldest file %s \n", oldestFileName)
 		}
 
 		err = os.Remove(oldestFileName)
 		if err != nil {
-			fatalf("Error while deleting oldest file-> "+oldestFileName, err)
+			glog.Infof("Error while deleting oldest file-> "+oldestFileName, err)
+			continue
 		}
 		continue
 
 	}
 }
 
-func fatalf(f string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, f, args)
-	fmt.Fprint(os.Stderr, "\n")
-	os.Exit(1)
-}
-
 func getLevel(fileName string) string {
 	fields := strings.Split(fileName, ".")
 	if len(fields) < 3 {
-		if *verbose {
-			fmt.Printf("unexpected filename: %q \n", fileName)
+		if glog.V(1) {
+			glog.Infof("unexpected filename: %q \n", fileName)
 		}
 		return ""
 	}
@@ -236,8 +237,8 @@ func getLevel(fileName string) string {
 	}
 
 	if len(fields) < 3 {
-		if *verbose {
-			fmt.Printf("unexpected filename: %q \n", fileName)
+		if glog.V(1) {
+			glog.Infof("unexpected filename: %q \n", fileName)
 		}
 		return ""
 	}
@@ -250,8 +251,8 @@ func getLevel(fileName string) string {
 func getCreationDate(fileName string) time.Time {
 	fields := strings.Split(fileName, ".")
 	if len(fields) < 3 {
-		if *verbose {
-			fmt.Printf("unexpected filename: %q \n", fileName)
+		if glog.V(1) {
+			glog.Infof("unexpected filename: %q \n", fileName)
 		}
 		return time.Time{}
 	}
@@ -259,8 +260,8 @@ func getCreationDate(fileName string) time.Time {
 		fields = fields[:len(fields)-1]
 	}
 	d, err := time.Parse("20060102", strings.SplitN(fields[len(fields)-2], "-", 2)[0])
-	if err != nil && *verbose {
-		fmt.Printf("invalid date: %s", err)
+	if err != nil && glog.V(1) {
+		glog.Infof("invalid date: %s", err)
 		return time.Time{}
 	}
 

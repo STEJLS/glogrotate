@@ -120,11 +120,6 @@ func (r *rotater) clean(lvl string) error {
 		return nil
 	}
 
-	glog.Infoln(files)
-	glog.Infoln(firstToDel)
-	glog.Infoln(len(files))
-	glog.Flush()
-
 	for i := firstToDel + 1; i < len(files); i++ {
 		if glog.V(1) {
 			glog.Infof("delete %s\n", files[i].name)

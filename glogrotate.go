@@ -303,8 +303,6 @@ func (f *fileInfo) Creation() time.Time {
 		return time.Time{}
 	}
 
-	glog.Info(d.Format(time.RFC3339Nano))
-
 	return d
 }
 

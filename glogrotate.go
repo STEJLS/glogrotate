@@ -95,8 +95,15 @@ func (r *rotater) clean(lvl string) error {
 	deleteAfter := r.deleteAfter(lvl)
 	files := r.files[lvl]
 	// Определим файлы которые трагать не будем
-	var firstToDel int
+	var firstToDel = -1
 	for i, f := range files {
+
+		// Если это файл на удаление значит мы дошли до "порога"
+		if f.Creation().Before(time.Now().Add(-deleteAfter)) {
+			firstToDel = i
+			break
+		}
+
 		// Иначе, проверим что он сжат
 		if !strings.HasSuffix(f.name, ".gz") {
 			if glog.V(1) {
@@ -107,17 +114,10 @@ func (r *rotater) clean(lvl string) error {
 				continue
 			}
 		}
-
-		// Если это файл на удаление значит мы дошли до "порога"
-		if f.Creation().Before(time.Now().Add(-deleteAfter)) {
-			firstToDel = i
-			break
-
-		}
 	}
 
 	// Нам нечего удалять
-	if firstToDel == 0 || firstToDel+1 == len(files) {
+	if firstToDel == -1 || firstToDel+1 == len(files) {
 		return nil
 	}
 

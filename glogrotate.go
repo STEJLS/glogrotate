@@ -50,6 +50,7 @@ func main() {
 	for _, log := range flag.Args() {
 		r := newRotater(filepath.Join(*base, log))
 		r.Rotate()
+		glog.Infof("Очистка '%s' закончена", log)
 	}
 }
 

@@ -279,7 +279,7 @@ func (f *fileInfo) String() string {
 	return f.name
 }
 
-// we want the date from 'one.rz-reqmngt1-eu.root.log.ERROR.20150320-103857.29198'
+// we want the date from 'one.rz-reqmngt1-eu.root.log.ERROR.20150320-103857.029198'
 func (f *fileInfo) Creation() time.Time {
 	fields := strings.Split(f.name, ".")
 	if len(fields) < 3 {
@@ -291,11 +291,19 @@ func (f *fileInfo) Creation() time.Time {
 	if fields[len(fields)-1] == `gz` {
 		fields = fields[:len(fields)-1]
 	}
-	d, err := time.Parse("20060102", strings.SplitN(fields[len(fields)-2], "-", 2)[0])
+
+	microseconds := fields[len(fields)-1]
+	for len(microseconds) != 6 {
+		microseconds = "0" + microseconds
+	}
+
+	d, err := time.Parse("20060102-150405.000000", fields[len(fields)-2]+"."+microseconds)
 	if err != nil && glog.V(1) {
 		glog.Infof("invalid date: %s", err)
 		return time.Time{}
 	}
+
+	glog.Info(d.Format(time.RFC3339Nano))
 
 	return d
 }
